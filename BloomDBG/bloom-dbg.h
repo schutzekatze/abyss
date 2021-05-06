@@ -31,6 +31,11 @@
 #include <sstream>
 #include <string>
 
+#include "btllib/include/btllib/bloom_filter.hpp"
+#include "btllib/include/btllib/seq_reader.hpp"
+#include "btllib/include/btllib/nthash.hpp"
+#include "btllib/include/btllib/counting_bloom_filter.hpp"
+
 #if _OPENMP
 #include <omp.h>
 #endif
@@ -1378,7 +1383,7 @@ assemble(
     char** argv,
     SolidKmerSetT& solidKmerSet,
     const AssemblyParams& params,
-    std::ostream& out, bool longMode = false,
+    std::ostream& out, std::string seedreadsFile, bool longMode = false,
 	unsigned type = 0, size_t threshold = 0, double proportion = 0)
 {
 	//std::cerr << "checkpoint0" << std::endl;
@@ -1423,7 +1428,23 @@ assemble(
 	AssemblyStreams<FastaConcat> streams(in, out, checkpointOut, traceOut, readLogOut);
 
 	/* run the assembly */
-	assemble(solidKmerSet, assembledKmerSet, counters, params, streams, longMode, type, threshold, proportion);
+	assemble(solidKmerSet, assembledKmerSet, counters, params, streams, seedreadsFile, longMode, type, threshold, proportion);
+}
+
+void filterSeedreads(const size_t bfBytes, size_t k, const std::string& seedreadsFile, std::set<std::string>& seedreads) {
+	k = 20;
+	btllib::KmerBloomFilter coveredKmers(bfBytes, 4, k);
+	
+	btllib::SeqReader reader(seedreadsFile, btllib::SeqReader::Flag::LONG_MODE);
+	btllib::SeqReader::Record record;
+	while ((record = reader.read())) {
+		const size_t numKmersInRead = record.seq.size() - k + 1;
+		const size_t numKmersFound = coveredKmers.contains(record.seq);
+		if (double(numKmersFound) / double(numKmersInRead) < 0.5) {
+			seedreads.insert(record.name);
+			coveredKmers.insert(record.seq);
+		}
+	}
 }
 
 /**
@@ -1452,9 +1473,12 @@ assemble(
     AssembledKmerSetT& assembledKmerSet,
     AssemblyCounters& counters,
     const AssemblyParams& params,
-    AssemblyStreams<InputReadStreamT>& streams, bool longMode = false,
+    AssemblyStreams<InputReadStreamT>& streams, std::string seedreadsFile, bool longMode = false,
 	unsigned type = 0, size_t threshold = 0, double proportion = 0)
 {
+	std::set<std::string> seedreads;
+	filterSeedreads(goodKmerSet.sizeInBytes(), goodKmerSet.getKmerSize(), seedreadsFile, seedreads);
+
 	assert(params.initialized());
 	//std::cerr << "checkpoint0.1" << std::endl;
 	/* per-thread I/O buffer (size is in bases) */
@@ -1501,6 +1525,9 @@ assemble(
 				good = in >> rec;
 				if (!good)
 					break;
+				if (seedreads.find(rec.id) == seedreads.end()) {
+					continue;
+				}
 #pragma omp atomic
 				readsUntilCheckpoint--;
 				buffer.push_back(rec);

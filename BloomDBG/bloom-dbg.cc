@@ -125,7 +125,7 @@ static const char USAGE_MESSAGE[] =
 /** Assembly params (stores command-line options) */
 BloomDBG::AssemblyParams params;
 
-static const char shortopts[] = "b:C:g:H:i:j:k:K:o:q:Q:R:s:t:T:vS:lx:y:z:";
+static const char shortopts[] = "b:C:g:H:i:j:k:K:o:q:Q:R:s:t:T:vS:lx:y:z:F:";
 
 enum
 {
@@ -176,6 +176,7 @@ static const struct option longopts[] = {
 	{ "type", required_argument, NULL, 'x' },
 	{ "threshold", required_argument, NULL, 'y' },
 	{ "porportion", required_argument, NULL, 'z' },
+	{ "seedreads-file", required_argument, NULL, 'F' },
 	{ NULL, 0, NULL, 0 }
 };
 
@@ -241,7 +242,7 @@ initGlobals(const BloomDBG::AssemblyParams& params)
  * Resume assembly from previously saved checkpoint.
  */
 void
-resumeAssemblyFromCheckpoint(int argc, char** argv, BloomDBG::AssemblyParams& params, ostream& out)
+resumeAssemblyFromCheckpoint(int argc, char** argv, BloomDBG::AssemblyParams& params, ostream& out, std::string seedreadsFile)
 {
 	assert(params.checkpointsEnabled() && checkpointExists(params));
 
@@ -295,7 +296,7 @@ resumeAssemblyFromCheckpoint(int argc, char** argv, BloomDBG::AssemblyParams& pa
 	BloomDBG::resumeFromCheckpoint(solidKmerSet, visitedKmerSet, counters, params, streams);
 
 	/* resume the assembly */
-	BloomDBG::assemble(solidKmerSet, visitedKmerSet, counters, params, streams);
+	BloomDBG::assemble(solidKmerSet, visitedKmerSet, counters, params, streams, seedreadsFile);
 }
 
 /**
@@ -304,7 +305,7 @@ resumeAssemblyFromCheckpoint(int argc, char** argv, BloomDBG::AssemblyParams& pa
  * is constructed using `abyss-bloom build -t rolling-hash`.)
  */
 void
-prebuiltBloomAssembly(int argc, char** argv, BloomDBG::AssemblyParams& params, ostream& out, bool longMode = false)
+prebuiltBloomAssembly(int argc, char** argv, BloomDBG::AssemblyParams& params, ostream& out, std::string seedreadsFile, bool longMode = false)
 {
 	/* load prebuilt Bloom filter from file */
 
@@ -339,7 +340,7 @@ prebuiltBloomAssembly(int argc, char** argv, BloomDBG::AssemblyParams& params, o
 		cerr << params;
 
 	/* do assembly */
-	BloomDBG::assemble(argc - optind, argv + optind, bloom, params, out, longMode);
+	BloomDBG::assemble(argc - optind, argv + optind, bloom, params, out, seedreadsFile, longMode);
 	
 	/* write supplementary files (e.g. GraphViz) */
 
@@ -350,7 +351,7 @@ prebuiltBloomAssembly(int argc, char** argv, BloomDBG::AssemblyParams& params, o
  * Load the reads into a counting Bloom filter and do the assembly.
  */
 void
-countingBloomAssembly(int argc, char** argv, const BloomDBG::AssemblyParams& params, ostream& out, bool longMode = false, std::string solid_path = "", unsigned type = 0, size_t threshold = 0, double porportion = 0)
+countingBloomAssembly(int argc, char** argv, const BloomDBG::AssemblyParams& params, ostream& out, std::string seedreadsFile, bool longMode = false, std::string solid_path = "", unsigned type = 0, size_t threshold = 0, double porportion = 0)
 {
 	/* init global vars for k-mer size and spaced seed pattern */
 
@@ -389,7 +390,7 @@ countingBloomAssembly(int argc, char** argv, const BloomDBG::AssemblyParams& par
 	}
 	/* second pass through FASTA files for assembling */
 
-	BloomDBG::assemble(argc - optind, argv + optind, bloom, params, out, longMode, type, threshold, porportion);
+	BloomDBG::assemble(argc - optind, argv + optind, bloom, params, out, seedreadsFile, longMode, type, threshold, porportion);
 
 	/* write supplementary files (e.g. GraphViz) */
 
@@ -410,6 +411,8 @@ main(int argc, char** argv)
 	double porportion = 0;
 	std::string solid_path = "";
 	std::string ph = "";
+
+	std::string seedreadsFile = "";
 
 	for (int c; (c = getopt_long(argc, argv, shortopts, longopts, NULL)) != -1;) {
 		istringstream arg(optarg != NULL ? optarg : "");
@@ -488,6 +491,9 @@ main(int argc, char** argv)
 			porportion = std::stod(ph);
 			ph = "";
 			break;
+		case 'F':
+			arg >> seedreadsFile;
+			break;
 		case OPT_HELP:
 			cout << USAGE_MESSAGE;
 			exit(EXIT_SUCCESS);
@@ -519,6 +525,11 @@ main(int argc, char** argv)
 			cerr << PROGRAM ": invalid option: `-" << (char)c << optarg << "'\n";
 			exit(EXIT_FAILURE);
 		}
+	}
+
+	if (seedreadsFile.empty()) {
+		cerr << PROGRAM ": missing mandatory option `-F`\n";
+		die = true;
 	}
 
 	if (params.bloomPath.empty() && params.bloomSize == 0) {
@@ -586,11 +597,11 @@ main(int argc, char** argv)
 
 	/* load the Bloom filter and do the assembly */
 	if (params.checkpointsEnabled() && checkpointExists(params))
-		resumeAssemblyFromCheckpoint(argc, argv, params, out);
+		resumeAssemblyFromCheckpoint(argc, argv, params, out, seedreadsFile);
 	else if (!params.bloomPath.empty())
-		prebuiltBloomAssembly(argc, argv, params, out, longMode);
+		prebuiltBloomAssembly(argc, argv, params, out, seedreadsFile, longMode);
 	else
-		countingBloomAssembly(argc, argv, params, out, longMode, solid_path, type, threshold, porportion);
+		countingBloomAssembly(argc, argv, params, out, seedreadsFile, longMode, solid_path, type, threshold, porportion);
 
 	/* cleanup */
 	if (!params.outputPath.empty())
